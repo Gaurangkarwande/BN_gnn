@@ -1,0 +1,12 @@
+---
+
+# model hyperparameters
+embedding_dim: 64
+gnn_hidden_dim: 64
+gnn_out_dim: 32
+fc1_out_dim: 16
+
+# training parameters
+num_epoch: 100
+patience: 20
+min_delta: 1e-5

@@ -3,10 +3,10 @@ Util functions for bayesian networks
 """
 
 from typing import List, Tuple
-from pgmpy.readwrite import BIFReader
-from pathlib import Path
+
 import numpy as np
 import pandas as pd
+from pgmpy.readwrite import BIFReader
 from sklearn.preprocessing import OrdinalEncoder
 
 
@@ -58,13 +58,13 @@ def get_terminal_connection_nodes(bn: BIFReader, target: str) -> Tuple[List[str]
     return nodes, node_ids
 
 
-def encode_data(df_raw_data: pd.DataFrame, bn: BIFReader) -> Tuple[pd.DataFrame, OrdinalEncoder] :
+def encode_data(df_raw_data: pd.DataFrame, bn: BIFReader) -> Tuple[pd.DataFrame, OrdinalEncoder]:
     """Encode raw categorical data into numerical data that can be fed into neural networks
 
     Args:
         df_raw_data: the raw dataframe
         bn: the loaded bayesian network
-    
+
     Returns:
         pd.Dataframe: transformed numeric dataframe
         OrdinalEncoder: the encoder fit to the data
