@@ -7,6 +7,7 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 from pgmpy.readwrite import BIFReader
+from scipy.stats import bernoulli
 from sklearn.preprocessing import OrdinalEncoder
 
 
@@ -79,3 +80,24 @@ def encode_data(df_raw_data: pd.DataFrame, bn: BIFReader) -> Tuple[pd.DataFrame,
     oe.fit(df_raw_data[variables].values)
     encoded_data = oe.transform(df_raw_data[variables].values)
     return pd.DataFrame(encoded_data, columns=variables), oe
+
+
+def perturb_adj_df(adj_df: pd.DataFrame, perturbation_factor: float) -> pd.DataFrame:
+    """Perturb the input adjacency dataframe
+
+    Args:
+        adj_mat: the input adjacency dataframe
+        perturbation_factor: the probabiliy that a given edge may be changed. May be deleted or
+            added.
+
+    Returns: the perturbed adjacency matrix
+    """
+
+    pmf = bernoulli(perturbation_factor)
+
+    def flip_edge(edge: int) -> int:
+        flip = pmf.rvs(1)
+        return float(not edge) if flip else edge
+
+    adj_df = adj_df.apply(np.vectorize(flip_edge))
+    return adj_df
