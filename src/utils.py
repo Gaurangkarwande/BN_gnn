@@ -41,7 +41,7 @@ def adj_df_from_BIF(bn: BIFReader, perturbation_factor: float = 0) -> pd.DataFra
     return adj_df
 
 
-def get_terminal_connection_nodes(bn: BIFReader, target: str) -> Tuple[List[str], List[int]]:
+def get_terminal_connection_nodes(adj_df: pd.DataFrame, target: str) -> Tuple[List[str], List[int]]:
     """Return the edge connnections to the target node
 
     Args:
@@ -51,16 +51,14 @@ def get_terminal_connection_nodes(bn: BIFReader, target: str) -> Tuple[List[str]
     Returns: the tuple of the node names and corresponding indices
     """
 
-    node_list = bn.get_variables()
-    node_dict = {node: idx for idx, node in enumerate(node_list)}
     nodes, node_ids = list(), list()
 
-    for edge in bn.get_edges():
-        source, destination = edge
-        if destination == target:
-            source_id = node_dict[source]
-            nodes.append(source)
-            node_ids.append(source_id)
+    node_id = 0
+    for index, value in adj_df[target].items():
+        if value == 1:
+            nodes.append(index)
+            node_ids.append(node_id)
+        node_id += 1
 
     return nodes, node_ids
 
@@ -99,13 +97,19 @@ def perturb_adj_df(adj_df: pd.DataFrame, perturbation_factor: float) -> pd.DataF
     Returns: the perturbed adjacency matrix
     """
 
+    if perturbation_factor == 0:
+        return adj_df
+
     pmf = bernoulli(perturbation_factor)
 
     def flip_edge(edge: int) -> int:
+        if edge:
+            return float(False)
         flip = pmf.rvs(1)
         return float(not edge) if flip else edge
 
     adj_df = adj_df.apply(np.vectorize(flip_edge))
+    np.fill_diagonal(adj_df.values, 0.0)
     return adj_df
 
 

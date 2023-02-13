@@ -17,8 +17,8 @@ import yaml
 from pgmpy.readwrite import BIFReader
 from torch.utils.data import DataLoader
 
-from src.constants import ALARM, GLOBAL_SEED
-from src.data import AlarmDataset
+from src.constants import ALARM, ALARM_TARGET, GLOBAL_SEED, HEPAR_TARGET, HEPAR
+from src.data import BNDataset
 from src.models.BNNet import BNNet
 from src.utils import (
     EarlyStopping,
@@ -189,17 +189,31 @@ def train_BN(
     torch.manual_seed(GLOBAL_SEED)
 
     # create datasets
+
+    target_node = HEPAR_TARGET
     perturbation_factor = 0.0
     adj_df = adj_df_from_BIF(bn, perturbation_factor)
 
-    train_set = AlarmDataset(
-        df_data=df_data_train, bn=bn, adj_df=adj_df, perturbation_factor=perturbation_factor
+    train_set = BNDataset(
+        df_data=df_data_train,
+        target_node=target_node,
+        bn=bn,
+        adj_df=adj_df,
+        perturbation_factor=perturbation_factor,
     )
-    val_set = AlarmDataset(
-        df_data=df_data_val, bn=bn, adj_df=adj_df, perturbation_factor=perturbation_factor
+    val_set = BNDataset(
+        df_data=df_data_val,
+        target_node=target_node,
+        bn=bn,
+        adj_df=adj_df,
+        perturbation_factor=perturbation_factor,
     )
-    test_set = AlarmDataset(
-        df_data=df_data_test, bn=bn, adj_df=adj_df, perturbation_factor=perturbation_factor
+    test_set = BNDataset(
+        df_data=df_data_test,
+        target_node=target_node,
+        bn=bn,
+        adj_df=adj_df,
+        perturbation_factor=perturbation_factor,
     )
 
     # log network summary
@@ -416,7 +430,7 @@ if __name__ == "__main__":
 
     # create logger
     logging.basicConfig(
-        filename=dirpath_save.joinpath(f"bn_{ALARM}.log"),
+        filename=dirpath_save.joinpath(f"bn_{HEPAR}.log"),
         format="%(asctime)s %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,

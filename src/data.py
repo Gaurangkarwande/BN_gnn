@@ -13,15 +13,17 @@ from pgmpy.readwrite import BIFReader
 from torch.utils.data import Dataset
 from torch_geometric.utils import dense_to_sparse
 
-from src.constants import ALARM_TARGET
 from src.utils import get_terminal_connection_nodes
 
 
-def load_data(fpath_data: Path, fpath_network: Path) -> Tuple[np.ndarray, np.ndarray]:
-    """Prepare the input and targets for alarm dataset
+def load_data(
+    fpath_data: Path, target_node: str, fpath_network: Path
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Prepare the input and targets for bn dataset
 
     Args:
         fpath_data: path to the data generated from BN
+        target_node: the target node to use
         fpath_network: path to the BN
 
     Returns: the input features and the target variables
@@ -29,19 +31,20 @@ def load_data(fpath_data: Path, fpath_network: Path) -> Tuple[np.ndarray, np.nda
 
     reader = BIFReader(fpath_network)
     nodes = reader.get_variables()
-    target_node_id = nodes.index(ALARM_TARGET)
+    target_node_id = nodes.index(target_node)
     nodes.pop(target_node_id)
     df_data = pd.read_csv(fpath_data)
-    X, y = df_data[nodes].values, df_data[ALARM_TARGET].values
+    X, y = df_data[nodes].values, df_data[target_node].values
     return X, y
 
 
-class AlarmDataset(Dataset):
-    """Dataset class for the alarm bn"""
+class BNDataset(Dataset):
+    """Dataset class for the bn"""
 
     def __init__(
         self,
         df_data: pd.DataFrame,
+        target_node: str,
         bn: BIFReader,
         adj_df: pd.DataFrame,
         perturbation_factor: float = 0,
@@ -49,6 +52,7 @@ class AlarmDataset(Dataset):
         """
         Args:
             df_data: the simulated data as a pandas dataframe
+            target_node: the target node to use
             bn: the loaded bayesian network
             adj_df: the adjacency dataframe
             perturbation_factor: the amount of perturbation applied to adjacency matrix
@@ -56,20 +60,20 @@ class AlarmDataset(Dataset):
         super().__init__()
 
         nodes = bn.get_variables()
-        target_node_id = nodes.index(ALARM_TARGET)
+        target_node_id = nodes.index(target_node)
         nodes.pop(target_node_id)
 
         self.input_features, self.target_labels = (
             df_data[nodes].values,
-            df_data[ALARM_TARGET].values,
+            df_data[target_node].values,
         )
         self.input_nodes = nodes
-        self.target_node = ALARM_TARGET
+        self.target_node = target_node
         self.variable_states = bn.get_states()
         self.input_states = [self.variable_states[node] for node in self.input_nodes]
-        self.target_states = self.variable_states[ALARM_TARGET]
+        self.target_states = self.variable_states[target_node]
         self.terminal_nodes, self.terminal_node_ids = get_terminal_connection_nodes(
-            bn, ALARM_TARGET
+            adj_df, target_node
         )
         self.adj_mat = adj_df.loc[self.input_nodes][self.input_nodes].values
         self.edge_index, self.edge_weights = dense_to_sparse(torch.as_tensor(self.adj_mat))
