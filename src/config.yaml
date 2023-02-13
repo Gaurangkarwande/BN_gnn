@@ -7,6 +7,10 @@ gnn_out_dim: 32
 fc1_out_dim: 16
 
 # training parameters
-num_epoch: 100
-patience: 20
-min_delta: 1e-5
+batch_size_train: 64
+batch_size_val: 64
+batch_size_test: 64
+num_epochs: 50
+patience: 10
+min_delta: 0.00001
+lr: 0.01

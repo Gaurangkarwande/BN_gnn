@@ -39,10 +39,12 @@ class BNNet(nn.Module):
         super().__init__()
 
         num_embeddings_list = [len(state) for state in node_states]
-        self.node_embedding_layers = [
-            nn.Embedding(num_emdeddings, config["embedding_dim"])
-            for num_emdeddings in num_embeddings_list
-        ]
+        self.node_embedding_layers = nn.ModuleList(
+            [
+                nn.Embedding(num_emdeddings, config["embedding_dim"])
+                for num_emdeddings in num_embeddings_list
+            ]
+        )
 
         self.gnn = GNN(config=config, edge_index=edge_index)
 
