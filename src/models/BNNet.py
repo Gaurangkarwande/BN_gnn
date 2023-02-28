@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import torch
 import torch.nn as nn
 
-from .GNN import GNN
+from .GNN import GNN, GNN_nonstatic
 
 
 class BNNet(nn.Module):
@@ -45,14 +45,18 @@ class BNNet(nn.Module):
                 for num_emdeddings in num_embeddings_list
             ]
         )
+        self.node_embedding_layers.requires_grad_ = False
 
-        self.gnn = GNN(config=config, edge_index=edge_index)
+        # self.gnn = GNN(config=config, edge_index=edge_index)
+        self.gnn = GNN_nonstatic(config=config, edge_index=edge_index, num_nodes=num_nodes)
 
         self.MLP = nn.Sequential(
-            nn.Linear(config["gnn_out_dim"] * len(terminal_node_ids), config["fc1_out_dim"]),
+            nn.Linear(config["gnn_out_dim"] * 3 * len(terminal_node_ids), len(target_node_states)),
             nn.LeakyReLU(),
-            nn.Linear(config["fc1_out_dim"], len(target_node_states)),
+            # nn.Linear(config["fc1_out_dim"], len(target_node_states)),
         )
+
+        self.dropout = nn.Dropout()
 
         self.terminal_node_ids = terminal_node_ids
         self.num_nodes = num_nodes
@@ -72,7 +76,9 @@ class BNNet(nn.Module):
             gnn_input.append(node_embedding_layer(X[:, i]))
 
         x = torch.stack(gnn_input, dim=1)
+        x = self.dropout(x)
         x = self.gnn(x)
+        x = self.dropout(x)
         x = x[:, self.terminal_node_ids]
         x = x.view(-1, x.shape[1] * x.shape[2])
         x = self.MLP(x)

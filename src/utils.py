@@ -14,11 +14,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 
 
-def adj_df_from_BIF(bn: BIFReader, perturbation_factor: float = 0) -> pd.DataFrame:
+def adj_df_from_BIF(bn: BIFReader, target: str, perturbation_factor: float = 0) -> pd.DataFrame:
     """Create adjacency matrix form BIF file
 
     Args:
         bn: the loaded bayesian network
+        target: the name of the target node/variable
         perturbation_factor: the probabiliy that a given edge may be changed. May be deleted or
             added.
 
@@ -26,6 +27,9 @@ def adj_df_from_BIF(bn: BIFReader, perturbation_factor: float = 0) -> pd.DataFra
     """
 
     node_list = bn.get_variables()
+    node_list.pop(node_list.index(target))
+    node_list.append(target)
+
     num_nodes = len(node_list)
     node_dict = {node: idx for idx, node in enumerate(node_list)}
     adj_mat = np.zeros((num_nodes, num_nodes))

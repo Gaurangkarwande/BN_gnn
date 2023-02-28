@@ -1,9 +1,9 @@
 ---
 
 # model hyperparameters
-embedding_dim: 64
+embedding_dim: 16
 gnn_hidden_dim: 64
-gnn_out_dim: 32
+gnn_out_dim: 16
 fc1_out_dim: 16
 
 # training parameters

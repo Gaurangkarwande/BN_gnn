@@ -192,7 +192,7 @@ def train_BN(
 
     target_node = HEPAR_TARGET
     perturbation_factor = 0.0
-    adj_df = adj_df_from_BIF(bn, perturbation_factor)
+    adj_df = adj_df_from_BIF(bn, target_node, perturbation_factor)
 
     train_set = BNDataset(
         df_data=df_data_train,
