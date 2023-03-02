@@ -4,14 +4,14 @@ Data preparation scripts for bayesian networks
 
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 from pgmpy.readwrite import BIFReader
 from torch.utils.data import Dataset
-from torch_geometric.utils import dense_to_sparse
+from torch_geometric.utils import dense_to_sparse, to_dense_adj
 
 from src.utils import get_terminal_connection_nodes
 
@@ -36,6 +36,45 @@ def load_data(
     df_data = pd.read_csv(fpath_data)
     X, y = df_data[nodes].values, df_data[target_node].values
     return X, y
+
+
+def reconstruct_adj_mats(
+    input_edge_weights: torch.Tensor,
+    terminal_edge_weights: torch.Tensor,
+    input_edge_index: torch.Tensor,
+    terminal_node_ids: List[int],
+    node_list: List[str],
+) -> torch.Tensor:
+    """Reconstruct the adjecency matrices from edge index and terminal nodes and return list of
+        adj_matrices
+
+    Args:
+        input_edge_weights: edge weights of the input edges
+        terminal_edge_weights: edge weights of the terminal edges
+        input_edge_index: the edge_index without the target node
+        terminal_node_ids: the node ids directly connected to the target node
+        node_list: the list of variable names with the last one being the target ndoe
+
+    Returns: adjacency matrices for each sample
+    """
+
+    terminal_node_id = len(node_list) - 1
+    terminal_edge_index = []
+
+    for node_id in terminal_node_ids:
+        terminal_edge_index.append([node_id, terminal_node_id])
+
+    terminal_edge_index = torch.as_tensor(terminal_edge_index).T
+    # print(input_edge_index.shape, terminal_edge_index.shape)
+    edge_index = torch.concat((input_edge_index, terminal_edge_index), dim=1).cpu()
+    edge_weights = torch.concat((input_edge_weights, terminal_edge_weights), dim=1).cpu()
+
+    adj_mats = []
+
+    for e in edge_weights:
+        adj_mats.append(to_dense_adj(edge_index, edge_attr=e))
+
+    return torch.stack(adj_mats).squeeze()
 
 
 class BNDataset(Dataset):

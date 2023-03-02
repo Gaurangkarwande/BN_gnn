@@ -18,7 +18,7 @@ from pgmpy.readwrite import BIFReader
 from torch.utils.data import DataLoader
 
 from src.constants import ALARM, ALARM_TARGET, GLOBAL_SEED, HEPAR_TARGET, HEPAR
-from src.data import BNDataset
+from src.data import BNDataset, reconstruct_adj_mats
 from src.models.BNNet import BNNet
 from src.utils import (
     EarlyStopping,
@@ -183,6 +183,7 @@ def train_BN(
     verbose: bool,
     dirpath_out: Path,
     encoder: object,
+    perturbation_factor: int,
 ):
     start = time.time()
     np.random.seed(GLOBAL_SEED)
@@ -191,7 +192,6 @@ def train_BN(
     # create datasets
 
     target_node = HEPAR_TARGET
-    perturbation_factor = 0.0
     adj_df = adj_df_from_BIF(bn, target_node, perturbation_factor)
 
     train_set = BNDataset(
@@ -260,6 +260,7 @@ def train_BN(
     fpath_loss_curve_plot = dirpath_out.joinpath("loss_curve.jpg")
     fpath_acc_curve_plot = dirpath_out.joinpath("acc_curve.jpg")
     fpath_inference_df = dirpath_out.joinpath("inference.csv")
+    fpath_adj_mat = dirpath_out.joinpath("adj_mat.npy")
     dirpath_checkpoint = dirpath_out.joinpath("model_checkpoint")
     dirpath_checkpoint.mkdir()
     fpath_checkpoint = None
@@ -364,6 +365,7 @@ def train_BN(
         edge_index=edge_index,
         terminal_node_ids=train_set.terminal_node_ids,
         target_node_states=train_set.target_states,
+        inference=True,
     )
     model.to(device)
     model.load_state_dict(checkpoint["model"])
@@ -386,6 +388,20 @@ def train_BN(
         print(f"Final test accuracy: {acc_test}")
         print(f"Total time taken: {time_taken} s")
 
+    # analyse edge weights
+
+    adj_mats = reconstruct_adj_mats(
+        input_edge_weights=model.gnn.edge_weights,
+        terminal_edge_weights=model.terminal_edge_weights,
+        input_edge_index=train_set.edge_index,
+        terminal_node_ids=model.terminal_node_ids,
+        node_list=adj_df.columns,
+    )
+    # adj_mat_aggregated = (torch.mean(adj_mats, dim=0) > 0.4).float().numpy()
+    logger.info(f" adj mat stats: Min {adj_mats.max()}, Max {adj_mats.min()}")
+    np.save(fpath_adj_mat, adj_mats.numpy(), allow_pickle=True)
+    print("learnt adj mat save")
+
     del model
     torch.cuda.empty_cache()
     gc.collect()
@@ -404,6 +420,12 @@ def parse_args():
         type=Path,
         help="path to where training runs will be recorded",
         required=True,
+    )
+    parser.add_argument(
+        "--perturbation_factor",
+        type=float,
+        help="the perturbation factor",
+        default=False,
     )
     parser.add_argument(
         "--overfit",
@@ -462,4 +484,5 @@ if __name__ == "__main__":
         verbose=True,
         dirpath_out=dirpath_save,
         encoder=encoder,
+        perturbation_factor=args.perturbation_factor
     )

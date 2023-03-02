@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import torch
 import torch.nn as nn
 
-from .GNN import GNN, GNN_nonstatic
+from .GNN import GNN_nonstatic
 
 
 class BNNet(nn.Module):
@@ -25,6 +25,7 @@ class BNNet(nn.Module):
         edge_index: torch.Tensor,
         terminal_node_ids: List[int],
         target_node_states: int,
+        inference: bool = False,
     ) -> None:
         """
 
@@ -35,6 +36,7 @@ class BNNet(nn.Module):
             edge_index: the coo adjacency matrix
             terminal_node_ids: the ids of the nodes which are connected to the target node
             target_node_states: number of prediction classes
+            inference: flag to indicate inference
         """
         super().__init__()
 
@@ -48,11 +50,16 @@ class BNNet(nn.Module):
         self.node_embedding_layers.requires_grad_ = False
 
         # self.gnn = GNN(config=config, edge_index=edge_index)
-        self.gnn = GNN_nonstatic(config=config, edge_index=edge_index, num_nodes=num_nodes)
+        self.gnn = GNN_nonstatic(
+            config=config, edge_index=edge_index, num_nodes=num_nodes, inference=inference
+        )
+        self.attn = nn.MultiheadAttention(
+            embed_dim=config["gnn_out_dim"], num_heads=config["gat_heads"], dropout=0.5
+        )
 
         self.MLP = nn.Sequential(
-            nn.Linear(config["gnn_out_dim"] * 3 * len(terminal_node_ids), len(target_node_states)),
             nn.LeakyReLU(),
+            nn.Linear(config["gnn_out_dim"] * len(terminal_node_ids), len(target_node_states)),
             # nn.Linear(config["fc1_out_dim"], len(target_node_states)),
         )
 
@@ -60,6 +67,8 @@ class BNNet(nn.Module):
 
         self.terminal_node_ids = terminal_node_ids
         self.num_nodes = num_nodes
+        self.terminal_edge_weights = None
+        self.inference = inference
 
     def forward(self, X: torch.LongTensor) -> torch.Tensor:
         """The forward propagation method
@@ -80,7 +89,18 @@ class BNNet(nn.Module):
         x = self.gnn(x)
         x = self.dropout(x)
         x = x[:, self.terminal_node_ids]
+        x, attn_weights = self.attn(x, x, x)
         x = x.view(-1, x.shape[1] * x.shape[2])
         x = self.MLP(x)
+
+        terminal_edge_weights = torch.diagonal(attn_weights, dim1=-2, dim2=-1)
+
+        if self.inference:
+            if self.terminal_edge_weights is not None:
+                self.terminal_edge_weights = torch.cat(
+                    (self.terminal_edge_weights, terminal_edge_weights.T)
+                )
+            else:
+                self.terminal_edge_weights = terminal_edge_weights.T
 
         return x

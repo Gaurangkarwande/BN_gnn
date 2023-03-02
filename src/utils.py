@@ -108,9 +108,9 @@ def perturb_adj_df(adj_df: pd.DataFrame, perturbation_factor: float) -> pd.DataF
 
     def flip_edge(edge: int) -> int:
         if edge:
-            return float(False)
+            return float(True)
         flip = pmf.rvs(1)
-        return float(not edge) if flip else edge
+        return float(flip)
 
     adj_df = adj_df.apply(np.vectorize(flip_edge))
     np.fill_diagonal(adj_df.values, 0.0)
