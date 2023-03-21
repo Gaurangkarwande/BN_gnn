@@ -7,26 +7,33 @@ import gc
 import logging
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
 import yaml
-from pgmpy.readwrite import BIFReader
+from pgmpy.utils import get_example_model
+from pgmpy.models import BayesianModel
+from pgmpy.metrics import structure_score
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
-from src.constants import ALARM, ALARM_TARGET, GLOBAL_SEED, HEPAR_TARGET, HEPAR
+from src.constants import GLOBAL_SEED
 from src.data import BNDataset
 from src.models.BNNet import BNNet
 from src.utils import (
     EarlyStopping,
     LRScheduler,
-    adj_df_from_BIF,
+    adj_diff_stats,
     encode_data,
     get_timestamp,
     get_train_test_splits,
+    construct_adj_mat,
+    update_bn_model,
+    perturb_adj_df,
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -174,57 +181,90 @@ def inference(
 
 
 def train_BN(
-    config: Dict[str, Any],
-    logger: logging.Logger,
+    bn_name: str,
+    bn: BayesianModel,
     df_data_train: pd.DataFrame,
     df_data_val: pd.DataFrame,
     df_data_test: pd.DataFrame,
-    bn: BIFReader,
+    config: Dict[str, Any],
+    logger: logging.Logger,
+    writer: SummaryWriter,
     verbose: bool,
     dirpath_out: Path,
-    encoder: object,
+    noise: Optional[float] = None,
 ):
     start = time.time()
     np.random.seed(GLOBAL_SEED)
     torch.manual_seed(GLOBAL_SEED)
 
-    # create datasets
+    # sort the causal dag
 
-    target_node = HEPAR_TARGET
-    perturbation_factor = 0.0
-    adj_df = adj_df_from_BIF(bn, target_node, perturbation_factor)
+    node_list = list(nx.topological_sort(bn))
+    edge_list = list(bn.edges)
+
+    # identify target node
+
+    target_node = node_list[-1]
+
+    # get gt and perturbed adjacency matrix
+
+    adj_df_gt = construct_adj_mat(edge_list=edge_list, nodes=node_list)
+    adj_df = perturb_adj_df(adj_df=adj_df_gt, noise=noise)
+
+    bn = update_bn_model(bn.copy(), adj_df)
 
     train_set = BNDataset(
         df_data=df_data_train,
         target_node=target_node,
         bn=bn,
         adj_df=adj_df,
-        perturbation_factor=perturbation_factor,
+        noise=noise,
     )
     val_set = BNDataset(
         df_data=df_data_val,
         target_node=target_node,
         bn=bn,
         adj_df=adj_df,
-        perturbation_factor=perturbation_factor,
+        noise=noise,
     )
     test_set = BNDataset(
         df_data=df_data_test,
         target_node=target_node,
         bn=bn,
         adj_df=adj_df,
-        perturbation_factor=perturbation_factor,
+        noise=noise,
     )
 
-    # log network summary
+    # log data summary
+
+    num_gt_edges_retained, num_extra_edges, num_total_diff = adj_diff_stats(adj_df_gt, adj_df)
+
+    adj_dict = {
+        "noise": noise,
+        "num_edges_gt": adj_df_gt.values.sum().sum(),
+        "num_edges_perturb": adj_df.values.sum().sum(),
+        "num_gt_edges_retained": num_gt_edges_retained,
+        "num_extra_edges": num_extra_edges,
+        "num_total_diff_edges": num_total_diff,
+    }
 
     train_set.log_summary(logger)
+
+    logger.info(f"Number of edge perturb: {adj_dict['num_edges_perturb']}")
+    logger.info(f"Number of gt edges retained: {adj_dict['num_gt_edges_retained']}")
+    logger.info(f"Number of different edges: {adj_dict['num_total_diff']}\n")
+
+    logger.info(f"Number of training samples: {len(df_train)}")
+    logger.info(f"Number of validation samples: {len(df_valid)}")
+    logger.info(f"Number of testing samples: {len(df_test)}")
 
     # create dataloaders
 
     dataloader_train = DataLoader(train_set, batch_size=config["batch_size_train"])
     dataloader_valid = DataLoader(val_set, batch_size=config["batch_size_val"])
     dataloader_test = DataLoader(test_set, batch_size=config["batch_size_test"])
+
+    example_data = next(iter(dataloader_valid))
 
     # create model
 
@@ -255,13 +295,17 @@ def train_BN(
 
     model.to(device)
 
+    writer.add_graph(model, example_data[0].to(device))
+
     # setup paths
 
     fpath_loss_curve_plot = dirpath_out.joinpath("loss_curve.jpg")
     fpath_acc_curve_plot = dirpath_out.joinpath("acc_curve.jpg")
     fpath_inference_df = dirpath_out.joinpath("inference.csv")
+    dirpath_model_history = dirpath_out.joinpath("model_history")
     dirpath_checkpoint = dirpath_out.joinpath("model_checkpoint")
     dirpath_checkpoint.mkdir()
+    dirpath_model_history.mkdir()
     fpath_checkpoint = None
 
     # training
@@ -295,6 +339,12 @@ def train_BN(
             f"Valid Loss= {loss_valid:.3f}, Valid Acc={acc_valid:.3f} \t"
             f" Training Time ={time_train:.2f} s"
         )
+
+        writer.add_scalar("Loss/train", loss_train, epoch)
+        writer.add_scalar("Accuracy/train", acc_train, epoch)
+        writer.add_scalar("Loss/valid", loss_valid, epoch)
+        writer.add_scalar("Accuracy/valid", acc_valid, epoch)
+
         if acc_valid > best_valid_acc:
             best_valid_acc = acc_valid
             checkpoint = {
@@ -314,6 +364,8 @@ def train_BN(
         lr_scheduler(loss_valid)
         early_stopping(loss_valid)
 
+        writer.add_scalar("Early Stopping", early_stopping.counter, epoch)
+
         train_history_loss.append(loss_train)
         train_history_acc.append(acc_train)
 
@@ -322,6 +374,8 @@ def train_BN(
 
         if early_stopping.early_stop:
             break
+    
+    writer.flush()
 
     logger.info(f"Final scheduler state {lr_scheduler.get_final_lr()}\n")
     del model
@@ -340,7 +394,7 @@ def train_BN(
     plt.savefig(fpath_loss_curve_plot, bbox_inches="tight", dpi=150)
     plt.close()
 
-    # save loss curves
+    # save acc curves
     plt.plot(range(len(train_history_acc)), train_history_acc, label="Train Accuracy")
     plt.plot(range(len(val_history_acc)), val_history_acc, label="Val Accuracy")
     # plt.ylim(top=5000)
@@ -350,6 +404,25 @@ def train_BN(
     plt.title("Accuracy Curves")
     plt.savefig(fpath_acc_curve_plot, bbox_inches="tight", dpi=150)
     plt.close()
+
+    # save curves data
+
+    np.save(
+        dirpath_model_history.joinpath("train_history_loss.npy"),
+        train_history_loss,
+        allow_pickle=True,
+    )
+    np.save(
+        dirpath_model_history.joinpath("train_history_acc.npy"),
+        train_history_acc,
+        allow_pickle=True,
+    )
+    np.save(
+        dirpath_model_history.joinpath("val_history_loss.npy"), val_history_loss, allow_pickle=True
+    )
+    np.save(
+        dirpath_model_history.joinpath("val_history_loss.npy"), val_history_acc, allow_pickle=True
+    )
 
     logger.info("******* Finished Training *******")
     if verbose:
@@ -377,25 +450,39 @@ def train_BN(
     df_data_test.to_csv(fpath_inference_df)
     time_taken = time.time() - start
 
+    # find bif score on updated bn
+
+    BIF_perturbed = structure_score(bn, df_data_test_BIF)
+
+    # compile results
+
+    results_dict = {
+        "target_node": target_node,
+        "loss_test": loss_test,
+        "acc_test": acc_test,
+        "bif_perturbed": BIF_perturbed,
+    }
+
     logger.info(f"Final test CE loss: {loss_test}")
     logger.info(f"Final test accuracy: {acc_test}")
+    logger.info(f"BIF score: {BIF_perturbed}")
     logger.info(f"Total time taken: {time_taken} s")
 
     if verbose:
         print(f"Final test CE loss: {loss_test}")
         print(f"Final test accuracy: {acc_test}")
         print(f"Total time taken: {time_taken} s")
+        print(f"BIF score: {BIF_perturbed}")
 
     del model
     torch.cuda.empty_cache()
     gc.collect()
-    return loss_test, acc_test
+    return results_dict, adj_dict
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Parser for training BNNet model")
-    parser.add_argument("--fpath_data", type=Path, help="path to generated data", required=True)
-    parser.add_argument("--fpath_bif", type=Path, help="path to bayesian network", required=True)
+    parser.add_argument("--bn_name", type=str, help="name of bayesian network", required=True)
     parser.add_argument(
         "--fpath_config", type=Path, help="path to yaml config", required=False, default=None
     )
@@ -418,48 +505,77 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    dirpath_save = args.dirpath_results.joinpath(get_timestamp() + "training_record")
+    dirpath_save = args.dirpath_results.joinpath(get_timestamp() + "_" + args.bn_name)
     dirpath_save.mkdir()
-    df_data = pd.read_csv(args.fpath_data, dtype=str)
-    bn = BIFReader(args.fpath_bif)
+
+    # get bayesian network and simulate data
+    bn = get_example_model(args.bn_name)
+    df_data = bn.simulate(10000, seed=GLOBAL_SEED)
+
+    # get BIF dataframe for scoring
+
+    _, _, df_data_test_BIF = get_train_test_splits(df_data, GLOBAL_SEED, overfit=False)
+
+    # find BIF score on gt model
+
+    bif_gt = structure_score(bn, df_data_test_BIF)
 
     with open(args.fpath_config, "r") as f:
         config = yaml.safe_load(f)
-    df_data, encoder = encode_data(df_data, bn)
-    df_train, df_valid, df_test = get_train_test_splits(df_data, GLOBAL_SEED, args.overfit)
 
     # create logger
     logging.basicConfig(
-        filename=dirpath_save.joinpath(f"bn_{HEPAR}.log"),
+        filename=dirpath_save.joinpath(f"bn_{args.bn_name}.log"),
         format="%(asctime)s %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
     logger = logging.getLogger("bn")
 
+    writer = SummaryWriter(log_dir=dirpath_save)
+
+    # encode data
+    df_data, encoder = encode_data(df_data, bn)
+    df_train, df_valid, df_test = get_train_test_splits(df_data, GLOBAL_SEED, args.overfit)
+
     # log experiment parameters
 
     logger.info("Training options")
-    logger.info(f"fpath_data: {str(args.fpath_data)}")
-    logger.info(f"fpath_bn: {str(args.fpath_bif)}")
+    logger.info(f"BN name: {str(args.bn_name)}")
     logger.info(f"dirpath_save: {str(dirpath_save)}")
     logger.info(f"The config file: {config}")
-
-    # log data information
-
     logger.info(f"overfit experiment: {args.overfit}")
-    logger.info(f"Number of training samples: {len(df_train)}")
-    logger.info(f"Number of validation samples: {len(df_valid)}")
-    logger.info(f"Number of testing samples: {len(df_test)}")
 
-    train_BN(
-        config=config,
-        logger=logger,
+    writer.add_text(args.bn_name, f"Num nodes: {len(bn.nodes)}, Num GT edges: {len(bn.edges)}")
+
+    noise = 1
+
+    # log bn details
+
+    logger.info("BN details")
+    logger.info(f"Num nodes: {len(bn.nodes)}")
+    logger.info(f"Num GT edges: {len(bn.edges)}")
+    logger.info(f"Noise: {noise}")
+
+    results_dict, adj_dict = train_BN(
+        bn_name=args.bn_name,
+        bn=bn,
         df_data_train=df_train,
         df_data_val=df_valid,
         df_data_test=df_test,
-        bn=bn,
-        verbose=True,
+        config=config,
+        logger=logger,
+        writer=writer,
         dirpath_out=dirpath_save,
-        encoder=encoder,
+        verbose=True,
+        noise=noise,
     )
+
+    logger.info(f"BIF score GT: {bif_gt}")
+
+    results_dict.update({'bif_gt' : bif_gt})
+    writer.add_hparams(
+        adj_dict,
+        results_dict,
+    )
+    writer.flush()

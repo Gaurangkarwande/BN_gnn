@@ -4,12 +4,13 @@ Data preparation scripts for bayesian networks
 
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 from pgmpy.readwrite import BIFReader
+from pgmpy.models import BayesianModel
 from torch.utils.data import Dataset
 from torch_geometric.utils import dense_to_sparse
 
@@ -45,9 +46,9 @@ class BNDataset(Dataset):
         self,
         df_data: pd.DataFrame,
         target_node: str,
-        bn: BIFReader,
+        bn: BayesianModel,
         adj_df: pd.DataFrame,
-        perturbation_factor: float = 0,
+        noise: Optional[float] = None,
     ) -> None:
         """
         Args:
@@ -55,11 +56,11 @@ class BNDataset(Dataset):
             target_node: the target node to use
             bn: the loaded bayesian network
             adj_df: the adjacency dataframe
-            perturbation_factor: the amount of perturbation applied to adjacency matrix
+            noise: the amount of perturbation applied to adjacency matrix
         """
         super().__init__()
 
-        nodes = bn.get_variables()
+        nodes = list(bn.nodes())
         target_node_id = nodes.index(target_node)
         nodes.pop(target_node_id)
 
@@ -69,15 +70,18 @@ class BNDataset(Dataset):
         )
         self.input_nodes = nodes
         self.target_node = target_node
-        self.variable_states = bn.get_states()
+        self.variable_states = bn.states
         self.input_states = [self.variable_states[node] for node in self.input_nodes]
         self.target_states = self.variable_states[target_node]
         self.terminal_nodes, self.terminal_node_ids = get_terminal_connection_nodes(
             adj_df, target_node
         )
+
+        assert len(self.terminal_nodes) > 0, "Bruh, there are no connections to the target node"
+        self.num_edges = adj_df.sum().sum()
         self.adj_mat = adj_df.loc[self.input_nodes][self.input_nodes].values
         self.edge_index, self.edge_weights = dense_to_sparse(torch.as_tensor(self.adj_mat))
-        self.perturbation_factor = perturbation_factor
+        self.noise = noise
 
     def __len__(self) -> int:
         return len(self.target_labels)
@@ -99,5 +103,3 @@ class BNDataset(Dataset):
         logger.info(
             f"Terminal nodes : {self.terminal_nodes}, Terminal node ids : {self.terminal_node_ids}"
         )
-        logger.info(f"ADJACENCY MATRIX - Number of edges : {len(self.edge_weights)}")
-        logger.info(f"ADJACENCY MATRIX - Peturbation from gt : {self.perturbation_factor}")

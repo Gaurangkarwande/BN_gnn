@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from pgmpy.readwrite import BIFReader
+from pgmpy.models import BayesianModel
 from scipy.stats import bernoulli
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
@@ -31,15 +32,14 @@ def adj_df_from_BIF(bn: BIFReader, target: str, perturbation_factor: float = 0) 
     node_list.append(target)
 
     num_nodes = len(node_list)
-    node_dict = {node: idx for idx, node in enumerate(node_list)}
-    adj_mat = np.zeros((num_nodes, num_nodes))
+    adj_df = pd.DataFrame(
+        np.zeros((num_nodes, num_nodes), dtype=float), index=node_list, columns=node_list
+    )
 
     for edge in bn.get_edges():
-        source, destination = edge
-        source_id, destination_id = node_dict[source], node_dict[destination]
-        adj_mat[source_id, destination_id] = 1.0
+        src, dst = edge
+        adj_df.loc[src][dst] = 1.0
 
-    adj_df = pd.DataFrame(adj_mat, index=node_list, columns=node_list)
     adj_df = perturb_adj_df(adj_df, perturbation_factor)
 
     return adj_df
@@ -67,7 +67,7 @@ def get_terminal_connection_nodes(adj_df: pd.DataFrame, target: str) -> Tuple[Li
     return nodes, node_ids
 
 
-def encode_data(df_raw_data: pd.DataFrame, bn: BIFReader) -> Tuple[pd.DataFrame, OrdinalEncoder]:
+def encode_data(df_raw_data: pd.DataFrame, bn: BayesianModel) -> Tuple[pd.DataFrame, OrdinalEncoder]:
     """Encode raw categorical data into numerical data that can be fed into neural networks
 
     Args:
@@ -79,42 +79,141 @@ def encode_data(df_raw_data: pd.DataFrame, bn: BIFReader) -> Tuple[pd.DataFrame,
         OrdinalEncoder: the encoder fit to the data
     """
 
-    variables = bn.get_variables()
-    states = bn.get_states()
+    variables = list(bn.nodes)
+    states = bn.states
 
-    assert list(states.keys()) == variables
+    categories = [states[variable] for variable in variables]
 
-    oe = OrdinalEncoder(categories=list(states.values()))
+    oe = OrdinalEncoder(categories=categories)
     oe.fit(df_raw_data[variables].values)
     encoded_data = oe.transform(df_raw_data[variables].values)
     return pd.DataFrame(encoded_data, columns=variables), oe
 
 
-def perturb_adj_df(adj_df: pd.DataFrame, perturbation_factor: float) -> pd.DataFrame:
+def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
     """Perturb the input adjacency dataframe
 
     Args:
         adj_mat: the input adjacency dataframe
-        perturbation_factor: the probabiliy that a given edge may be changed. May be deleted or
-            added.
+        noise: the amount of noise to be added
 
     Returns: the perturbed adjacency matrix
     """
 
-    if perturbation_factor == 0:
-        return adj_df
+    adj_mat = adj_df.values
+    noise = np.random.normal(0, noise, size=adj_mat.shape)
 
-    pmf = bernoulli(perturbation_factor)
+    perturbed_mat = np.triu(np.clip(np.round(adj_mat + noise), a_min=0, a_max=1), 1)
 
-    def flip_edge(edge: int) -> int:
-        if edge:
-            return float(False)
-        flip = pmf.rvs(1)
-        return float(not edge) if flip else edge
+    return pd.DataFrame(perturbed_mat, index=adj_df.index, columns=adj_df.columns)
 
-    adj_df = adj_df.apply(np.vectorize(flip_edge))
-    np.fill_diagonal(adj_df.values, 0.0)
+
+def construct_adj_mat(edge_list: List[Tuple[str, str]], nodes: List[str]) -> pd.DataFrame:
+    """Construct an adjacency matrix dataframe from list of edges
+
+    Args:
+        edge_list: List of edges where each element is tuple (source, destination)
+
+    Returns: the adjacency matrix as a dataframe
+    """
+
+    adj_df = pd.DataFrame(
+        np.zeros(shape=(len(nodes), len(nodes)), dtype=float), columns=nodes, index=nodes
+    )
+    for edge in edge_list:
+        src, dst = edge
+        adj_df.loc[src][dst] = 1.0
     return adj_df
+
+
+def create_random_dag(
+    nodes: List[str], target_node: str, prob: float, num_edges_gt: int
+) -> pd.DataFrame:
+    """Create a random DAG with given probability of edge
+
+    Args:
+        nodes: the list of variables in the DAG
+        target_node: the target variable
+        prob: the probability with which to add edges
+        num_edges_gt: the number of edges in the gt structure
+
+    Returns: a random DAG adjacency df
+    """
+
+    assert prob is not None
+
+    num_nodes = len(nodes)
+    nodes.pop(nodes.index(target_node))
+    nodes.append(target_node)
+    adj_mat = np.zeros((num_nodes, num_nodes), dtype=float)
+
+    edge_prob = (num_edges_gt * (1.0 + prob)) / (num_nodes * (num_nodes - 1) / 2)
+
+    for i in range(num_nodes):
+        for j in range(i + 1, num_nodes):
+            if np.random.rand() < edge_prob:
+                adj_mat[i, j] = 1.0
+
+    if adj_mat[:, -1].sum() == 0:
+        for i in range(num_nodes - 1):
+            if np.random.rand() < edge_prob:
+                adj_mat[i, -1] = 1.0
+
+    return pd.DataFrame(adj_mat, index=nodes, columns=nodes)
+
+
+def update_bn_model(bn: BayesianModel, adj_df: pd.DataFrame) -> BayesianModel:
+    """Update the DAG structure in the bayesian model with the given adjacency matrix
+
+    Args:
+        model: the model we want to update
+        adj_df: the adjacency df to infuse into the model
+
+    Returns: the updated model
+    """
+
+    bn.clear_edges()
+    nodes = list(adj_df.columns)
+    edges = []
+
+    for src in nodes:
+        for dst in nodes:
+            if adj_df.loc[src][dst] == 1:
+                edges.append((src, dst))
+
+    bn.add_edges_from(edges)
+    return bn
+
+
+def adj_diff_stats(adj_df_gt: pd.DataFrame, adj_df: pd.DataFrame) -> Tuple[int, int, int]:
+    """Compare the two adjacency dataframes and return stats about their difference
+
+    Args:
+        adj_df_gt: the gt adjacency
+        adj_df: the perturbed adjacency
+
+    Returns:
+        num_gt_edges_retained: the number of gt edges retained
+        num_extra_edges: the number of extra edges added
+        num_total_diff: the difference in number of edges in gt and perturbed
+    """
+
+    adj_mat_gt = adj_df_gt.values
+    adj_mat = adj_df.values
+
+    num_gt_edges_retained = 0
+    num_extra_edges = 0
+
+    for i in range(adj_mat_gt.shape[0]):
+        for j in range(adj_mat_gt.shape[1]):
+            if adj_mat_gt[i, j] == 1:
+                if adj_mat[i, j] == 1:
+                    num_gt_edges_retained += 1
+            else:
+                if adj_mat[i, j] == 1:
+                    num_extra_edges += 1
+
+    return num_gt_edges_retained, num_extra_edges, np.abs(adj_mat - adj_mat_gt).sum().sum()
 
 
 def get_train_test_splits(

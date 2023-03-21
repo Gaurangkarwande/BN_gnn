@@ -7,7 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch_geometric.nn import GCNConv, FAConv, GATv2Conv
+from torch_geometric.nn import GCNConv, GATv2Conv
 
 
 class GNN(nn.Module):
