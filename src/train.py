@@ -2,6 +2,7 @@
 The main script for training
 """
 
+import json
 import argparse
 import gc
 import logging
@@ -186,6 +187,7 @@ def train_BN(
     df_data_train: pd.DataFrame,
     df_data_val: pd.DataFrame,
     df_data_test: pd.DataFrame,
+    df_data_test_BIF: pd.DataFrame,
     config: Dict[str, Any],
     logger: logging.Logger,
     writer: SummaryWriter,
@@ -209,7 +211,7 @@ def train_BN(
     # get gt and perturbed adjacency matrix
 
     adj_df_gt = construct_adj_mat(edge_list=edge_list, nodes=node_list)
-    adj_df = perturb_adj_df(adj_df=adj_df_gt, noise=noise)
+    adj_df = perturb_adj_df(adj_df=adj_df_gt.copy(), noise=noise)
 
     bn = update_bn_model(bn.copy(), adj_df)
 
@@ -252,11 +254,11 @@ def train_BN(
 
     logger.info(f"Number of edge perturb: {adj_dict['num_edges_perturb']}")
     logger.info(f"Number of gt edges retained: {adj_dict['num_gt_edges_retained']}")
-    logger.info(f"Number of different edges: {adj_dict['num_total_diff']}\n")
+    logger.info(f"Number of different edges: {adj_dict['num_total_diff_edges']}\n")
 
-    logger.info(f"Number of training samples: {len(df_train)}")
-    logger.info(f"Number of validation samples: {len(df_valid)}")
-    logger.info(f"Number of testing samples: {len(df_test)}")
+    logger.info(f"Number of training samples: {len(df_data_train)}")
+    logger.info(f"Number of validation samples: {len(df_data_val)}")
+    logger.info(f"Number of testing samples: {len(df_data_test)}")
 
     # create dataloaders
 
@@ -548,7 +550,7 @@ if __name__ == "__main__":
 
     writer.add_text(args.bn_name, f"Num nodes: {len(bn.nodes)}, Num GT edges: {len(bn.edges)}")
 
-    noise = 1
+    noise = 0.0
 
     # log bn details
 
@@ -563,6 +565,7 @@ if __name__ == "__main__":
         df_data_train=df_train,
         df_data_val=df_valid,
         df_data_test=df_test,
+        df_data_test_BIF=df_data_test_BIF,
         config=config,
         logger=logger,
         writer=writer,
@@ -573,9 +576,14 @@ if __name__ == "__main__":
 
     logger.info(f"BIF score GT: {bif_gt}")
 
-    results_dict.update({'bif_gt' : bif_gt})
-    writer.add_hparams(
-        adj_dict,
-        results_dict,
-    )
+    target_node = results_dict.pop('target_node')
+    results_dict.update({'bif_gt': bif_gt})
+    writer.add_hparams(adj_dict, results_dict)
     writer.flush()
+
+    results_dict['target_node'] = target_node
+    results_dict.update(adj_dict)
+    # save inference results
+
+    with open(dirpath_save.joinpath("inference.json"), "w") as fp:
+        json.dump(results_dict, fp, indent=4)

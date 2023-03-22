@@ -5,14 +5,16 @@ Util functions for bayesian networks
 from datetime import datetime
 from typing import List, Tuple
 
+import random
 import numpy as np
 import pandas as pd
 import torch
 from pgmpy.readwrite import BIFReader
 from pgmpy.models import BayesianModel
-from scipy.stats import bernoulli
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
+
+from src.constants import GLOBAL_SEED
 
 
 def adj_df_from_BIF(bn: BIFReader, target: str, perturbation_factor: float = 0) -> pd.DataFrame:
@@ -67,7 +69,9 @@ def get_terminal_connection_nodes(adj_df: pd.DataFrame, target: str) -> Tuple[Li
     return nodes, node_ids
 
 
-def encode_data(df_raw_data: pd.DataFrame, bn: BayesianModel) -> Tuple[pd.DataFrame, OrdinalEncoder]:
+def encode_data(
+    df_raw_data: pd.DataFrame, bn: BayesianModel
+) -> Tuple[pd.DataFrame, OrdinalEncoder]:
     """Encode raw categorical data into numerical data that can be fed into neural networks
 
     Args:
@@ -90,6 +94,21 @@ def encode_data(df_raw_data: pd.DataFrame, bn: BayesianModel) -> Tuple[pd.DataFr
     return pd.DataFrame(encoded_data, columns=variables), oe
 
 
+def random_upper_triangular(n, max_ones):
+    # Initialize a matrix of size n x n with all elements set to zero
+    random.seed(GLOBAL_SEED)
+
+    matrix = np.zeros((n, n), dtype=int)
+
+    # Fill in the upper triangular portion of the matrix with random binary values
+    for i in range(n):
+        for j in range(i, n):
+            if random.random() < (max_ones / ((n * (n - 1) / 2) - i)):
+                matrix[i, j] = 1
+
+    return matrix
+
+
 def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
     """Perturb the input adjacency dataframe
 
@@ -100,12 +119,41 @@ def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
     Returns: the perturbed adjacency matrix
     """
 
+    if noise == 0:
+        return adj_df
+
+    np.random.seed(777)
+
     adj_mat = adj_df.values
-    noise = np.random.normal(0, noise, size=adj_mat.shape)
+    gt_edges = []
+    possible_edges = []
 
-    perturbed_mat = np.triu(np.clip(np.round(adj_mat + noise), a_min=0, a_max=1), 1)
+    for i in range(adj_mat.shape[0]):
+        for j in range(i+1, adj_mat.shape[0]):
+            if adj_mat[i, j] == 1:
+                gt_edges.append((i, j))
+                adj_mat[i, j] = 0.0
+            else:
+                possible_edges.append((i, j))
 
-    return pd.DataFrame(perturbed_mat, index=adj_df.index, columns=adj_df.columns)
+    num_edges_to_flip = int(np.ceil(len(gt_edges) * noise))
+    num_edges_retain = len(gt_edges) - num_edges_to_flip
+    
+    selected_edges = random.sample(gt_edges, num_edges_retain) + random.sample(possible_edges, num_edges_to_flip)
+
+    for edge in selected_edges:
+        src, dst = edge
+        adj_mat[src, dst] = 1.0
+
+
+    noise = 0.2
+    while adj_mat[:, -1].sum() == 0:
+        for i in range(adj_mat.shape[0] - 1):
+            if np.random.rand() < noise:
+                adj_mat[i, -1] = 1.0
+        noise *= 2
+    
+    return pd.DataFrame(adj_mat, index=adj_df.index, columns=adj_df.columns)
 
 
 def construct_adj_mat(edge_list: List[Tuple[str, str]], nodes: List[str]) -> pd.DataFrame:
