@@ -15,11 +15,15 @@ from pgmpy.metrics import structure_score
 from torch.utils.tensorboard import SummaryWriter
 
 from src.utils import get_timestamp, get_train_test_splits, encode_data
-from src.constants import GLOBAL_SEED
+from src.constants import GLOBAL_SEED, SEEDS
 from src.train import train_BN
 
 # BN_NAMES = ["sachs", "alarm", "hepar2", "diabetes"] # first four
-BN_NAMES = ["asia", "cancer", "child", "water", "hailfinder", "munin"]
+BN_NAMES_SMALL = ["asia", "cancer", "sachs"]
+BN_NAMES_MEDIUM = ["alarm", "child", "water"]
+BN_NAMES_LARGE = ["hailfinder", "hepar2", "diabetes"]
+BN_NAMES = BN_NAMES_SMALL + BN_NAMES_MEDIUM + BN_NAMES_LARGE
+BN_NAMES = ["diabetes"]
 NOISE_LEVELS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
@@ -39,17 +43,18 @@ def my_custom_logger(logger_name, logger_fpath, level=logging.DEBUG):
     return logger
 
 
-def run_exp_for(bn_name: str, dirpath_save: Path, config: Dict[str, Any]) -> None:
+def run_exp_for(bn_name: str, dirpath_save: Path, config: Dict[str, Any], seed: int) -> None:
     """Run experiment for the given BN
 
     Args:
         bn_name: the bn name
         dirpath_save: the path to where results wil be save
         config: the training config
+        seed: the seed to run on
 
     """
 
-    dirpath_save = dirpath_save.joinpath(bn_name)
+    dirpath_save = dirpath_save.joinpath(str(seed))
     dirpath_save.mkdir()
     inference_dict = defaultdict(list)
 
@@ -59,7 +64,7 @@ def run_exp_for(bn_name: str, dirpath_save: Path, config: Dict[str, Any]) -> Non
 
     # get BIF dataframe for scoring
 
-    _, _, df_data_test_BIF = get_train_test_splits(df_data, GLOBAL_SEED, overfit=False)
+    _, _, df_data_test_BIF = get_train_test_splits(df_data, seed, overfit=False)
 
     # find BIF score on gt model
 
@@ -76,7 +81,7 @@ def run_exp_for(bn_name: str, dirpath_save: Path, config: Dict[str, Any]) -> Non
 
     # encode data
     df_data, encoder = encode_data(df_data, bn)
-    df_train, df_valid, df_test = get_train_test_splits(df_data, GLOBAL_SEED, overfit=False)
+    df_train, df_valid, df_test = get_train_test_splits(df_data, seed, overfit=False)
 
     # log experiment parameters
 
@@ -90,6 +95,7 @@ def run_exp_for(bn_name: str, dirpath_save: Path, config: Dict[str, Any]) -> Non
 
         results_dict, adj_dict = train_BN(
             bn_name=bn_name,
+            seed=seed,
             bn=bn,
             df_data_train=df_train,
             df_data_val=df_valid,
@@ -152,4 +158,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
 
     for bn_name in BN_NAMES:
-        run_exp_for(bn_name=bn_name, dirpath_save=dirpath_save, config=config)
+        dirpath_save_bn = dirpath_save.joinpath(bn_name)
+        dirpath_save_bn.mkdir()
+        for seed in [600]:
+            run_exp_for(bn_name=bn_name, dirpath_save=dirpath_save_bn, config=config, seed=seed)

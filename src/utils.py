@@ -4,6 +4,9 @@ Util functions for bayesian networks
 
 from datetime import datetime
 from typing import List, Tuple
+from pathlib import Path
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
 
 import random
 import numpy as np
@@ -129,7 +132,7 @@ def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
     possible_edges = []
 
     for i in range(adj_mat.shape[0]):
-        for j in range(i+1, adj_mat.shape[0]):
+        for j in range(i + 1, adj_mat.shape[0]):
             if adj_mat[i, j] == 1:
                 gt_edges.append((i, j))
                 adj_mat[i, j] = 0.0
@@ -138,13 +141,14 @@ def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
 
     num_edges_to_flip = int(np.ceil(len(gt_edges) * noise))
     num_edges_retain = len(gt_edges) - num_edges_to_flip
-    
-    selected_edges = random.sample(gt_edges, num_edges_retain) + random.sample(possible_edges, num_edges_to_flip)
+
+    selected_edges = random.sample(gt_edges, num_edges_retain) + random.sample(
+        possible_edges, num_edges_to_flip
+    )
 
     for edge in selected_edges:
         src, dst = edge
         adj_mat[src, dst] = 1.0
-
 
     noise = 0.2
     while adj_mat[:, -1].sum() == 0:
@@ -152,7 +156,7 @@ def perturb_adj_df(adj_df: pd.DataFrame, noise: float) -> pd.DataFrame:
             if np.random.rand() < noise:
                 adj_mat[i, -1] = 1.0
         noise *= 2
-    
+
     return pd.DataFrame(adj_mat, index=adj_df.index, columns=adj_df.columns)
 
 
@@ -372,3 +376,49 @@ class EarlyStopping:
                 if self.verbose:
                     print("INFO: Early stopping")
                 self.early_stop = True
+
+
+def plot_results_individual(fpath_inference: Path, dirpath_save: Path) -> Tuple[object, object, object]:
+    """
+    Create individual plots for the inference file and get correlation results for noise, bic and
+    accuracy
+
+    Args:
+        fpath_inference: the path to the inference csv for given seed for given bn and for all
+            noise level
+        dirpath_save: the directory where it plot will be save
+
+    Returns:
+        corr_noise_acc: the pearson correlation coefficient for noise and accuracy
+        corr_noise_bic: the pearson correlation coefficient for noise and bic
+        corr_bic_acc: the pearson correlation coefficient for bic and accuracy
+    """
+
+    fig_name = fpath_inference.parent.stem
+    fpath_save = dirpath_save.joinpath(fig_name + ".jpg")
+    df = pd.read_csv(fpath_inference)
+    fig = plt.figure(figsize=(6, 6), dpi=150)
+    ax1 = plt.subplot(111)
+    noise = df["noise"].to_numpy()
+    bic = df["bif_perturbed"].to_numpy()
+    acc = df["acc_test"].to_numpy()
+
+    lns1 = ax1.plot(noise, acc, color="red", label="Accuracy")
+    ax1.set_ylabel("Accuracy")
+
+    ax2 = ax1.twinx()
+    lns2 = ax2.plot(0, -526247.51, "o", color="blue", label="BIC Score")
+    ax2.set_ylabel("BIC Score")
+    ax2.grid(None)
+
+    lns = lns1 + lns2
+    labs = [ln.get_label() for ln in lns]
+    ax1.legend(lns, labs, loc="upper right")
+
+    ax1.set_xlabel("Noise")
+    corr_noise_acc = pearsonr(noise, acc)
+    corr_noise_bic = pearsonr(noise, bic)
+    corr_bic_acc = pearsonr(bic, acc)
+    plt.savefig(fpath_save, bbox_inches="tight", dpi=150)
+    plt.close()
+    return corr_noise_acc, corr_noise_bic, corr_bic_acc

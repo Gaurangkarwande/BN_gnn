@@ -183,6 +183,7 @@ def inference(
 
 def train_BN(
     bn_name: str,
+    seed: int,
     bn: BayesianModel,
     df_data_train: pd.DataFrame,
     df_data_val: pd.DataFrame,
@@ -196,8 +197,8 @@ def train_BN(
     noise: Optional[float] = None,
 ):
     start = time.time()
-    np.random.seed(GLOBAL_SEED)
-    torch.manual_seed(GLOBAL_SEED)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
     # sort the causal dag
 
@@ -454,7 +455,10 @@ def train_BN(
 
     # find bif score on updated bn
 
-    BIF_perturbed = structure_score(bn, df_data_test_BIF)
+    if bn_name == 'munin':
+        BIF_perturbed = 0.0
+    else:
+        BIF_perturbed = structure_score(bn, df_data_test_BIF)
 
     # compile results
 

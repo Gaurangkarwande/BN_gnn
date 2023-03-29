@@ -15,3 +15,4 @@ DIABETES_TARGET = "bg_1"
 
 # training constants
 GLOBAL_SEED = 777
+SEEDS = [100, 200, 300, 400, 500, 600, 700]
